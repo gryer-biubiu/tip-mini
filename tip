@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+import os
+import fnmatch
+import sys
+import re
+import subprocess
+import argparse
+import difflib
+
+# 定义颜色代码
+RED = '\033[91m'
+GREEN = '\033[92m'
+YELLOW = '\033[93m'
+BLUE = '\033[94m'
+MAGENTA = '\033[95m'
+CYAN = '\033[96m'
+RESET = '\033[0m'  # 重置颜色
+
+VERSION = "1.0.1"
+
+
+def suggest_similar_patterns(pattern, patterns_list, n=3, cutoff=0.6):
+    """
+    根据提供的pattern和patterns_list建议相似的模式。
+
+    参数:
+    pattern -- 用户输入的搜索模式
+    patterns_list -- 可能的模式列表
+    n -- 返回的最大匹配数量 (默认: 3)
+    cutoff -- 相似度阈值，范围从0到1 (默认: 0.6)
+
+    返回:
+    包含最相似模式的列表
+    """
+    return difflib.get_close_matches(pattern, patterns_list, n=n, cutoff=cutoff)
+
+
+def find_files(directory, pattern):
+    matches = []
+    all_patterns = set()  # 用于存储所有的模式以供后续建议
+    for root, dirs, files in os.walk(directory):
+        for basename in files:
+            if fnmatch.fnmatch(basename, '*.md'):
+                match = re.match(r'^(.*?)\.md$', basename)
+                if match:
+                    all_patterns.add(match.group(1))  # 添加不带扩展名的文件名作为模式
+                if fnmatch.fnmatch(basename, f'{pattern}.md'):
+                    matches.append(os.path.join(root, basename))
+    return matches, all_patterns  # 返回匹配的文件列表和所有模式集合
+
+def highlight_keyword(text, search_pattern, color=RED):
+    if not search_pattern:
+        return text
+    regex = r'`\b({})\b'.format(re.escape(search_pattern))
+    return re.sub(regex, f"`{color}\\g<1>{RESET}", text)
+
+
+def print_file_content(file_path, search_pattern):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            lines = file.readlines()
+            # print(f"--- Content of {file_path} ---")
+            for line in lines:
+                stripped_line = line.strip()
+                highlighted_line = highlight_keyword(line, search_pattern)
+                if stripped_line:
+                    if stripped_line.startswith('#') or stripped_line.startswith('>'):
+                        print(f"{YELLOW}{line.rstrip()}{RESET}")
+                    elif stripped_line.startswith('-'):
+                        print(f"{GREEN}{line.rstrip()}{RESET}")
+                    elif stripped_line.startswith('`'):
+                        print(highlighted_line.rstrip())
+                    else:
+                        print(line.rstrip())
+            # print('--- End of File ---')
+    except Exception as e:
+        print(f"Could not read file {file_path}: {e}")
+
+def open_editor(file_path):
+    """Open the file with the default editor."""
+    editor = os.environ.get('EDITOR', 'vim')  # 默认使用vim作为编辑器
+    try:
+        subprocess.call([editor, file_path])
+    except Exception as e:
+        print(f"Could not open editor: {e}")
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(description='A tool used to prompt the usage of various instructions')
+
+    # 添加版本选项
+    parser.add_argument('-v', '--version', action='version', version=f"%(prog)s {VERSION}")
+
+    parser.add_argument('search_pattern', nargs='?', help='The pattern to search for')
+    parser.add_argument('-w', '--edit', action='store_true', help='Edit the found files')
+
+    args = parser.parse_args()
+
+    current_directory = ""
+    current_directory_ = current_directory + "/pages.zh"
+
+    search_pattern = args.search_pattern
+
+    if search_pattern is None:
+        if len(sys.argv) > 1 and (sys.argv[1] == '-v' or sys.argv[1] == '--version'):
+            # 版本信息已经被 argparse 处理了，所以这里什么都不做
+            pass
+        else:
+            parser.print_help()
+            sys.exit(0)
+
+    matching_files, all_patterns = find_files(current_directory_, search_pattern)
+
+    if not matching_files:
+        print(f"No files found matching the pattern: {search_pattern}")
+
+        # 提示相似的search_pattern
+        similar_patterns = suggest_similar_patterns(search_pattern, list(all_patterns))
+        if similar_patterns:
+            print("Did you mean one of these patterns?")
+            for similar in similar_patterns:
+                print(f" - {similar}")
+    else:
+        if args.edit:
+            if len(matching_files) > 1:
+                print("Multiple files match the pattern:")
+                for idx, file_path in enumerate(matching_files, start=1):
+                    print(f"{idx}: {file_path}")
+                try:
+                    choice = int(input("Enter the number of the file you want to edit: ")) - 1
+                    if 0 <= choice < len(matching_files):
+                        open_editor(matching_files[choice])
+                    else:
+                        print("Invalid selection.")
+                except ValueError:
+                    print("Please enter a valid number.")
+            elif len(matching_files) == 1:
+                open_editor(matching_files[0])
+        else:
+            for file_path in matching_files:
+                print_file_content(file_path, search_pattern)
